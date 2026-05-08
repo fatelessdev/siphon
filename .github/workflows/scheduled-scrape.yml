@@ -1,0 +1,88 @@
+name: Siphon Scheduled Scrape
+
+on:
+  schedule:
+    - cron: "0 * * * *"  # Every hour at :00
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "Number of tweets to fetch"
+        required: false
+        default: "30"
+      operation:
+        description: "Operation to run"
+        required: false
+        type: choice
+        options:
+          - scheduled
+          - both
+          - for-you
+          - following
+          - home
+        default: "scheduled"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: siphon-hourly-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Restore transaction cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .siphon-cache
+          key: ${{ runner.os }}-twitter-ct-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-twitter-ct-
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -m siphon db migrate
+
+      - name: Run auth healthcheck
+        env:
+          TWITTER_AUTH_TOKEN: ${{ secrets.TWITTER_AUTH_TOKEN }}
+          TWITTER_CT0: ${{ secrets.TWITTER_CT0 }}
+          TWITTER_COOKIE_STRING: ${{ secrets.TWITTER_COOKIE_STRING }}
+          SIPHON_LOG_LEVEL: INFO
+        run: python -m siphon healthcheck-auth
+
+      - name: Run scheduled scrape
+        env:
+          TWITTER_AUTH_TOKEN: ${{ secrets.TWITTER_AUTH_TOKEN }}
+          TWITTER_CT0: ${{ secrets.TWITTER_CT0 }}
+          TWITTER_COOKIE_STRING: ${{ secrets.TWITTER_COOKIE_STRING }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SIPHON_CACHE_DIR: .siphon-cache
+          SIPHON_LOG_LEVEL: INFO
+        run: |
+          python -m siphon scrape ${{ github.event.inputs.operation || 'scheduled' }} \
+            --count ${{ github.event.inputs.count || '30' }}
+
+      - name: Save transaction cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .siphon-cache
+          key: ${{ runner.os }}-twitter-ct-${{ github.run_id }}
