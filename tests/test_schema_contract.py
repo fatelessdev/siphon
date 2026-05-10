@@ -12,6 +12,10 @@ def _tweets_table_sql() -> str:
     return match.group(1)
 
 
+def _schema_sql() -> str:
+    return SCHEMA_SQL.read_text(encoding="utf-8")
+
+
 def test_tweets_table_keeps_only_agent_useful_columns():
     tweets_table = _tweets_table_sql()
 
@@ -48,3 +52,15 @@ def test_tweets_table_keeps_only_agent_useful_columns():
     ]
     for column in dropped_columns:
         assert not re.search(rf"\b{column}\b", tweets_table)
+
+
+def test_migration_cleanup_does_not_drop_kept_columns():
+    schema = _schema_sql()
+
+    kept_columns = [
+        "author_id",
+        "reply_to_tweet_id",
+        "quoted_tweet_id",
+    ]
+    for column in kept_columns:
+        assert f"DROP COLUMN IF EXISTS {column}" not in schema
