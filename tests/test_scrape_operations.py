@@ -1,4 +1,5 @@
 import sys
+import inspect
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -18,3 +19,9 @@ def test_for_you_alias_resolves_to_home_operation():
     assert resolve_scrape_operations("for-you") == ("home",)
     assert resolve_scrape_operations("home") == ("home",)
     assert resolve_scrape_operations("following") == ("following",)
+
+
+def test_scrape_does_not_run_migrations_inline():
+    from siphon.jobs.scrape_timeline import run_scrape
+
+    assert "run_migrations" not in inspect.getsource(run_scrape)

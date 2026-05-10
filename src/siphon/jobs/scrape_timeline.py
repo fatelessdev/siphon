@@ -16,7 +16,6 @@ from siphon.db.connection import (
     try_advisory_lock,
     try_lease_lock,
 )
-from siphon.db.migrations import run_migrations
 from siphon.db.tweet_repository import complete_scrape_run, start_scrape_run, upsert_tweets
 from siphon.extract.graphql_engine import GraphQLSession
 from siphon.parse.models import Tweet
@@ -150,13 +149,6 @@ async def run_scrape(operation: str = "scheduled", count: int = 30) -> int:
         cookies = load_cookies()
     except ValueError as e:
         logger.error("Auth config error: %s", e)
-        return 1
-
-    # Run migrations
-    try:
-        run_migrations()
-    except Exception as e:
-        logger.error("Migration failed: %s", e)
         return 1
 
     # Acquire DB lock
