@@ -18,28 +18,16 @@ class Tweet(BaseModel):
     author_handle: str
     author_name: str = ""
     created_at: datetime
-    lang: str | None = None
-    text_raw: str
-    text_normalized: str
-    tweet_type: str = "tweet"  # tweet, retweet, reply, quote
-    is_retweet: bool = False
-    is_reply: bool = False
-    is_quote: bool = False
-    parent_tweet_id: int | None = None
-    conversation_id: int | None = None
-    likes: int = 0
-    retweets: int = 0
-    replies: int = 0
-    quotes: int = 0
-    views: int = 0
-    bookmarks: int = 0
+    text: str
+    reply_to_tweet_id: int | None = None
+    reply_to_author_handle: str | None = None
+    reply_to_text: str | None = None
+    quoted_tweet_id: int | None = None
+    quoted_author_handle: str | None = None
+    quoted_text: str | None = None
     urls: list[str] = Field(default_factory=list)
     media: list[TweetMedia] = Field(default_factory=list)
-    hashtags: list[str] = Field(default_factory=list)
-    cashtags: list[str] = Field(default_factory=list)
     source_operation: str = ""
-    pinned: bool = False
-    raw_json: dict = Field(default_factory=dict)
 
 
 class UserProfile(BaseModel):

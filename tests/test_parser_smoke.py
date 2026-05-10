@@ -60,23 +60,24 @@ def test_home_timeline():
 
     t1 = tweets[0]
     assert t1.id == 1
+    assert isinstance(t1.author_id, int)
     assert t1.author_handle == "alice"
-    assert t1.tweet_type == "tweet"
     # note_tweet text preferred over legacy.full_text
-    assert "full text of a long tweet" in t1.text_raw
+    assert "full text of a long tweet" in t1.text
     assert len(t1.media) == 1
     assert t1.media[0].type == "photo"
-    assert t1.views == 1234
     assert t1.urls == ["https://example.com/post"]
 
     t2 = tweets[1]
     assert t2.id == 20  # Retweet resolves to original tweet's rest_id
-    assert t2.is_retweet is True
-    assert t2.tweet_type == "retweet"
     # Retweet resolves to the original author
     assert t2.author_handle == "carol"
-    assert t2.text_raw == "original retweeted post"
-    assert t2.is_quote is True  # Has a nested quote
+    assert t2.text == "original retweeted post"
+    assert not hasattr(t2, "is_retweet")
+    assert not hasattr(t2, "is_quote")
+    assert t2.quoted_tweet_id == 30
+    assert t2.quoted_author_handle == "dan"
+    assert t2.quoted_text == "quoted text"
 
     assert stats.raw == 2
     assert stats.parsed == 2
@@ -108,7 +109,7 @@ def test_empty_response():
     assert cursor is None
 
 
-def test_advertiser_source_entries_are_preserved_to_match_twitter_cli():
+def test_advertiser_source_entries_are_dropped_as_timeline_noise():
     data = {
         "data": {
             "home": {
@@ -138,10 +139,88 @@ def test_advertiser_source_entries_are_preserved_to_match_twitter_cli():
     stats = ParseStats()
     tweets, cursor = parse_timeline_response(data, stats)
 
-    assert [t.id for t in tweets] == [100, 200]
+    assert [t.id for t in tweets] == [100]
     assert cursor is None
     assert stats.raw == 2
-    assert stats.parsed == 2
+    assert stats.parsed == 1
+    assert stats.dropped_promoted == 1
+
+
+def test_tweet_model_exposes_single_canonical_text_field():
+    stats = ParseStats()
+    tweets, _ = parse_timeline_response(
+        {
+            "data": {
+                "home": {
+                    "home_timeline_urt": {
+                        "instructions": [
+                            {
+                                "entries": [
+                                    _minimal_tweet_entry(
+                                        300,
+                                        "text_author",
+                                        "Smart\u2014quote\u2026 text https://t.co/abc123",
+                                    )
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+        stats,
+    )
+
+    assert len(tweets) == 1
+    assert tweets[0].text == "Smart--quote... text"
+    assert not hasattr(tweets[0], "text_raw")
+    assert not hasattr(tweets[0], "text_normalized")
+    assert not hasattr(tweets[0], "lang")
+    assert not hasattr(tweets[0], "raw_json")
+
+
+def test_reply_context_is_compacted_from_timeline_module():
+    parent = _minimal_tweet_entry(900, "parent_author", "parent idea")
+    reply = _minimal_tweet_entry(901, "reply_author", "reply builds on parent")
+    reply_legacy = (
+        reply["content"]["itemContent"]["tweet_results"]["result"]["legacy"]
+    )
+    reply_legacy["in_reply_to_status_id_str"] = "900"
+    reply_legacy["in_reply_to_screen_name"] = "parent_author"
+
+    data = {
+        "data": {
+            "home": {
+                "home_timeline_urt": {
+                    "instructions": [
+                        {
+                            "entries": [
+                                {
+                                    "entryId": "conversation-900",
+                                    "content": {
+                                        "entryType": "TimelineTimelineModule",
+                                        "items": [
+                                            {"item": parent["content"]},
+                                            {"item": reply["content"]},
+                                        ],
+                                    },
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    }
+
+    stats = ParseStats()
+    tweets, _ = parse_timeline_response(data, stats)
+
+    reply_tweet = next(t for t in tweets if t.id == 901)
+    assert not hasattr(reply_tweet, "is_reply")
+    assert reply_tweet.reply_to_tweet_id == 900
+    assert reply_tweet.reply_to_author_handle == "parent_author"
+    assert reply_tweet.reply_to_text == "parent idea"
 
 
 def test_snowflake_ids_are_parsed_without_precision_loss():

@@ -11,7 +11,7 @@ Siphon runs as a GitHub Actions cron job (hourly) that:
 2. Fetches your For You feed and following feed
 3. Parses tweets with defensive, schema-resilient parsing
 4. Normalizes text (Unicode NFKC, HTML decode, smart quotes)
-5. Upserts into PostgreSQL with engagement tracking
+5. Upserts lean tweet rows into PostgreSQL
 6. Records each run with full observability (parse stats, errors, stealth status)
 
 ## Architecture
@@ -24,8 +24,8 @@ GitHub Actions (cron) → Siphon CLI → GraphQL Engine → Parser → PostgreSQ
 
 - **Single engine, dual auth mode:** curl_cffi with Chrome TLS impersonation for all requests
 - **Stealth:** Browser-faithful headers, x-client-transaction-id (soft-fail), human-like jitter
-- **Parser:** Handles TimelineTimelineItem, TimelineTimelineModule, TweetWithVisibilityResults, tombstones, retweets, quotes, note_tweet, articles
-- **Storage:** PostgreSQL with JSONB raw_json + indexed metadata columns
+- **Parser:** Handles TimelineTimelineItem, TimelineTimelineModule, TweetWithVisibilityResults, tombstones, retweets, quotes, note_tweet, articles, and drops promoted/advertiser entries
+- **Storage:** PostgreSQL with lean tweet rows and indexed canonical text
 
 ## Quick Start
 
@@ -86,17 +86,17 @@ python -m siphon scrape home --count 50
 ## Database Schema
 
 ### tweets
-Stores parsed tweet data with full-text search and engagement indexes.
+Stores parsed tweet data with full-text search and compact context.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | id | BIGINT | Tweet snowflake ID (primary key) |
+| author_id | BIGINT | Stable user ID for follow/profile scrape actions |
 | author_handle | VARCHAR | @username |
-| text_raw | TEXT | Exact API text |
-| text_normalized | TEXT | NFKC normalized, indexed for full-text search |
-| tweet_type | VARCHAR | tweet, retweet, reply, quote |
-| likes/retweets/replies/quotes/views/bookmarks | INTEGER | Engagement metrics |
-| raw_json | JSONB | Full API response (GIN indexed) |
+| text | TEXT | Canonical normalized text, indexed for full-text search |
+| reply_to_tweet_id/reply_to_author_handle/reply_to_text | mixed | Compact replied-to context when available |
+| quoted_tweet_id/quoted_author_handle/quoted_text | mixed | Compact quote context when available |
+| urls/media_urls | JSONB | Expanded links and media references |
 | scraped_at | TIMESTAMPTZ | When this tweet was ingested |
 
 ### scrape_runs
@@ -113,7 +113,7 @@ Sigil can query unprocessed tweets:
 ```sql
 SELECT * FROM tweets 
 WHERE scraped_at > NOW() - INTERVAL '24 hours'
-ORDER BY engagement DESC
+ORDER BY scraped_at ASC
 LIMIT 100;
 ```
 

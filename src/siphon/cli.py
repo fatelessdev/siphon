@@ -53,13 +53,13 @@ def scrape_following(count: int) -> None:
     sys.exit(exit_code)
 
 
-@scrape_group.command("home")
+@scrape_group.command("both")
 @click.option("--count", default=30, help="Number of tweets to fetch")
-def scrape_home(count: int) -> None:
-    """Scrape the home feed (algorithmic timeline)."""
+def scrape_both(count: int) -> None:
+    """Scrape both scheduled feeds (home + following)."""
     from siphon.jobs.scrape_timeline import run_scrape
 
-    exit_code = asyncio.run(run_scrape(operation="home", count=count))
+    exit_code = asyncio.run(run_scrape(operation="both", count=count))
     sys.exit(exit_code)
 
 
@@ -70,16 +70,6 @@ def scrape_for_you(count: int) -> None:
     from siphon.jobs.scrape_timeline import run_scrape
 
     exit_code = asyncio.run(run_scrape(operation="for-you", count=count))
-    sys.exit(exit_code)
-
-
-@scrape_group.command("scheduled")
-@click.option("--count", default=30, help="Number of tweets to fetch")
-def scrape_scheduled(count: int) -> None:
-    """Run the default scheduled scrape (For You + following feed)."""
-    from siphon.jobs.scrape_timeline import run_scrape
-
-    exit_code = asyncio.run(run_scrape(operation="scheduled", count=count))
     sys.exit(exit_code)
 
 

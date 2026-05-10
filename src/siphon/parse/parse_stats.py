@@ -16,6 +16,7 @@ class ParseStats:
     dropped_tombstone: int = 0
     dropped_exception: int = 0
     dropped_rt_unparseable: int = 0
+    dropped_promoted: int = 0
 
     @property
     def drop_rate(self) -> float:
@@ -28,7 +29,8 @@ class ParseStats:
             logger.warning(
                 "High drop rate: %.1f%% (%d/%d dropped). "
                 "no_result=%d, no_legacy=%d, schema_fail=%d, "
-                "tombstone=%d, exception=%d, rt_unparseable=%d",
+                "tombstone=%d, exception=%d, rt_unparseable=%d, "
+                "promoted=%d",
                 self.drop_rate,
                 self.raw - self.parsed,
                 self.raw,
@@ -38,6 +40,7 @@ class ParseStats:
                 self.dropped_tombstone,
                 self.dropped_exception,
                 self.dropped_rt_unparseable,
+                self.dropped_promoted,
             )
 
     def to_dict(self) -> dict:
@@ -50,5 +53,6 @@ class ParseStats:
             "dropped_tombstone": self.dropped_tombstone,
             "dropped_exception": self.dropped_exception,
             "dropped_rt_unparseable": self.dropped_rt_unparseable,
+            "dropped_promoted": self.dropped_promoted,
             "drop_rate_percent": round(self.drop_rate, 1),
         }

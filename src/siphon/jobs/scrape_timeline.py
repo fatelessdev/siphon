@@ -43,27 +43,24 @@ def resolve_scrape_operations(operation: str) -> tuple[str, ...]:
 
 def _format_tweet(i: int, t: Tweet) -> str:
     """Format a single tweet as Markdown."""
-    tags: list[str] = []
-    if t.is_retweet:
-        tags.append("RT")
-    if t.is_reply:
-        tags.append("REPLY")
-    if t.is_quote:
-        tags.append("QUOTE")
-    tag = f" `{'` `'.join(tags)}` " if tags else " "
-
-    lines = [f"### [{i}] @{t.author_handle}{tag}({t.created_at:%Y-%m-%d %H:%M UTC})"]
+    lines = [f"### [{i}] @{t.author_handle} ({t.created_at:%Y-%m-%d %H:%M UTC})"]
     lines.append("")
-    lines.append(f"> {t.text_normalized}")
+    lines.append(f"> {t.text}")
+    if t.quoted_text:
+        quoted_by = f"@{t.quoted_author_handle}" if t.quoted_author_handle else "quoted tweet"
+        lines.append("")
+        lines.append(f"> Quoting {quoted_by}: {t.quoted_text}")
+    if t.reply_to_text:
+        reply_to = f"@{t.reply_to_author_handle}" if t.reply_to_author_handle else "parent tweet"
+        lines.append("")
+        lines.append(f"> Replying to {reply_to}: {t.reply_to_text}")
     lines.append("")
-    lines.append("| Likes | Retweets | Replies | Quotes | Views | Bookmarks |")
-    lines.append("|-------|----------|---------|--------|-------|-----------|")
-    lines.append(f"| {t.likes} | {t.retweets} | {t.replies} | {t.quotes} | {t.views} | {t.bookmarks} |")
     if t.urls:
         lines.append("")
         lines.append(f"URLs: {', '.join(t.urls)}")
-    if t.hashtags:
-        lines.append(f"Hashtags: {', '.join('#' + h for h in t.hashtags)}")
+    if t.media:
+        lines.append("")
+        lines.append(f"Media: {', '.join(m.url for m in t.media if m.url)}")
     lines.append("")
     return "\n".join(lines)
 

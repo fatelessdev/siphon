@@ -26,41 +26,37 @@ def upsert_tweets(tweets: list[Tweet], source_operation: str = "") -> tuple[int,
             for tweet in tweets:
                 cur.execute("""
                     INSERT INTO tweets (
-                        id, author_id, author_handle, author_name, created_at, lang,
-                        text_raw, text_normalized, tweet_type, is_retweet, is_reply, is_quote,
-                        parent_tweet_id, conversation_id,
-                        likes, retweets, replies, quotes, views, bookmarks,
-                        urls, media_urls, hashtags, cashtags,
-                        source_operation, pinned, raw_json, scraped_at
+                        id, author_id, author_handle, author_name, created_at,
+                        text, reply_to_tweet_id, reply_to_author_handle, reply_to_text,
+                        quoted_tweet_id, quoted_author_handle, quoted_text,
+                        urls, media_urls, source_operation, scraped_at
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s,
-                        %s, %s,
-                        %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s,
                         %s, %s, %s, %s,
+                        %s, %s, %s,
                         %s, %s, %s, NOW()
                     )
                     ON CONFLICT (id) DO UPDATE SET
-                        likes = EXCLUDED.likes,
-                        retweets = EXCLUDED.retweets,
-                        replies = EXCLUDED.replies,
-                        quotes = EXCLUDED.quotes,
-                        views = EXCLUDED.views,
-                        bookmarks = EXCLUDED.bookmarks,
+                        author_id = EXCLUDED.author_id,
+                        author_handle = EXCLUDED.author_handle,
+                        author_name = EXCLUDED.author_name,
+                        text = EXCLUDED.text,
+                        reply_to_tweet_id = EXCLUDED.reply_to_tweet_id,
+                        reply_to_author_handle = EXCLUDED.reply_to_author_handle,
+                        reply_to_text = EXCLUDED.reply_to_text,
+                        quoted_tweet_id = EXCLUDED.quoted_tweet_id,
+                        quoted_author_handle = EXCLUDED.quoted_author_handle,
+                        quoted_text = EXCLUDED.quoted_text,
+                        urls = EXCLUDED.urls,
+                        media_urls = EXCLUDED.media_urls,
                         scraped_at = NOW()
                     RETURNING (xmax = 0) AS is_new
                 """, (
-                    tweet.id, tweet.author_id, tweet.author_handle, tweet.author_name,
-                    tweet.created_at, tweet.lang,
-                    tweet.text_raw, tweet.text_normalized, tweet.tweet_type,
-                    tweet.is_retweet, tweet.is_reply, tweet.is_quote,
-                    tweet.parent_tweet_id, tweet.conversation_id,
-                    tweet.likes, tweet.retweets, tweet.replies, tweet.quotes,
-                    tweet.views, tweet.bookmarks,
+                    tweet.id, tweet.author_id, tweet.author_handle, tweet.author_name, tweet.created_at,
+                    tweet.text, tweet.reply_to_tweet_id, tweet.reply_to_author_handle, tweet.reply_to_text,
+                    tweet.quoted_tweet_id, tweet.quoted_author_handle, tweet.quoted_text,
                     json.dumps(tweet.urls), json.dumps([m.model_dump() for m in tweet.media]),
-                    json.dumps(tweet.hashtags), json.dumps(tweet.cashtags),
-                    source_operation, tweet.pinned,
-                    json.dumps(tweet.raw_json),
+                    source_operation,
                 ))
                 result = cur.fetchone()
                 if result and result["is_new"]:

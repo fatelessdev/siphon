@@ -20,8 +20,6 @@ CREATE TABLE IF NOT EXISTS users (
     tweets_count INTEGER DEFAULT 0,
     verified BOOLEAN DEFAULT FALSE,
     profile_image_url TEXT,
-    pinned_tweet_id BIGINT,
-    raw_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     last_scraped_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -34,39 +32,94 @@ CREATE TABLE IF NOT EXISTS tweets (
     author_handle VARCHAR(50) NOT NULL,
     author_name VARCHAR(200) DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL,
-    lang VARCHAR(10),
-    text_raw TEXT NOT NULL,
-    text_normalized TEXT NOT NULL,
-    tweet_type VARCHAR(20) NOT NULL DEFAULT 'tweet',
-    is_retweet BOOLEAN DEFAULT FALSE,
-    is_reply BOOLEAN DEFAULT FALSE,
-    is_quote BOOLEAN DEFAULT FALSE,
-    parent_tweet_id BIGINT,
-    conversation_id BIGINT,
-    likes INTEGER DEFAULT 0,
-    retweets INTEGER DEFAULT 0,
-    replies INTEGER DEFAULT 0,
-    quotes INTEGER DEFAULT 0,
-    views INTEGER DEFAULT 0,
-    bookmarks INTEGER DEFAULT 0,
+    text TEXT NOT NULL,
+    reply_to_tweet_id BIGINT,
+    reply_to_author_handle VARCHAR(50),
+    reply_to_text TEXT,
+    quoted_tweet_id BIGINT,
+    quoted_author_handle VARCHAR(50),
+    quoted_text TEXT,
     urls JSONB DEFAULT '[]'::jsonb,
     media_urls JSONB DEFAULT '[]'::jsonb,
-    hashtags JSONB DEFAULT '[]'::jsonb,
-    cashtags JSONB DEFAULT '[]'::jsonb,
     source_operation VARCHAR(50) NOT NULL DEFAULT '',
-    pinned BOOLEAN DEFAULT FALSE,
-    raw_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     scraped_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_tweets_author_id ON tweets(author_id);
+ALTER TABLE users DROP COLUMN IF EXISTS pinned_tweet_id;
+ALTER TABLE users DROP COLUMN IF EXISTS raw_json;
+
+ALTER TABLE tweets ADD COLUMN IF NOT EXISTS text TEXT;
+ALTER TABLE tweets ADD COLUMN IF NOT EXISTS author_id BIGINT;
+UPDATE tweets SET author_id = 0 WHERE author_id IS NULL;
+ALTER TABLE tweets ALTER COLUMN author_id SET NOT NULL;
+ALTER TABLE tweets ADD COLUMN IF NOT EXISTS reply_to_tweet_id BIGINT;
+ALTER TABLE tweets ADD COLUMN IF NOT EXISTS reply_to_author_handle VARCHAR(50);
+ALTER TABLE tweets ADD COLUMN IF NOT EXISTS reply_to_text TEXT;
+ALTER TABLE tweets ADD COLUMN IF NOT EXISTS quoted_tweet_id BIGINT;
+ALTER TABLE tweets ADD COLUMN IF NOT EXISTS quoted_author_handle VARCHAR(50);
+ALTER TABLE tweets ADD COLUMN IF NOT EXISTS quoted_text TEXT;
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tweets' AND column_name = 'text_normalized'
+    ) AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tweets' AND column_name = 'text_raw'
+    ) THEN
+        EXECUTE 'UPDATE tweets
+                 SET text = COALESCE(NULLIF(text_normalized, ''''), NULLIF(text_raw, ''''), text)
+                 WHERE text IS NULL OR text = ''''';
+    ELSIF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tweets' AND column_name = 'text_normalized'
+    ) THEN
+        EXECUTE 'UPDATE tweets
+                 SET text = COALESCE(NULLIF(text_normalized, ''''), text)
+                 WHERE text IS NULL OR text = ''''';
+    ELSIF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tweets' AND column_name = 'text_raw'
+    ) THEN
+        EXECUTE 'UPDATE tweets
+                 SET text = COALESCE(NULLIF(text_raw, ''''), text)
+                 WHERE text IS NULL OR text = ''''';
+    END IF;
+END $$;
+ALTER TABLE tweets ALTER COLUMN text SET NOT NULL;
+
+DROP INDEX IF EXISTS idx_tweets_author_id;
+DROP INDEX IF EXISTS idx_tweets_tweet_type;
+DROP INDEX IF EXISTS idx_tweets_conversation_id;
+DROP INDEX IF EXISTS idx_tweets_text_fts;
+DROP INDEX IF EXISTS idx_tweets_raw_json;
+DROP INDEX IF EXISTS idx_tweets_engagement;
+
+ALTER TABLE tweets DROP COLUMN IF EXISTS lang;
+ALTER TABLE tweets DROP COLUMN IF EXISTS text_raw;
+ALTER TABLE tweets DROP COLUMN IF EXISTS text_normalized;
+ALTER TABLE tweets DROP COLUMN IF EXISTS tweet_type;
+ALTER TABLE tweets DROP COLUMN IF EXISTS is_retweet;
+ALTER TABLE tweets DROP COLUMN IF EXISTS is_reply;
+ALTER TABLE tweets DROP COLUMN IF EXISTS is_quote;
+ALTER TABLE tweets DROP COLUMN IF EXISTS parent_tweet_id;
+ALTER TABLE tweets DROP COLUMN IF EXISTS conversation_id;
+ALTER TABLE tweets DROP COLUMN IF EXISTS reply_to_tweet_id;
+ALTER TABLE tweets DROP COLUMN IF EXISTS quoted_tweet_id;
+ALTER TABLE tweets DROP COLUMN IF EXISTS likes;
+ALTER TABLE tweets DROP COLUMN IF EXISTS retweets;
+ALTER TABLE tweets DROP COLUMN IF EXISTS replies;
+ALTER TABLE tweets DROP COLUMN IF EXISTS quotes;
+ALTER TABLE tweets DROP COLUMN IF EXISTS views;
+ALTER TABLE tweets DROP COLUMN IF EXISTS bookmarks;
+ALTER TABLE tweets DROP COLUMN IF EXISTS hashtags;
+ALTER TABLE tweets DROP COLUMN IF EXISTS cashtags;
+ALTER TABLE tweets DROP COLUMN IF EXISTS pinned;
+ALTER TABLE tweets DROP COLUMN IF EXISTS raw_json;
+
 CREATE INDEX IF NOT EXISTS idx_tweets_created_at ON tweets(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tweets_tweet_type ON tweets(tweet_type);
-CREATE INDEX IF NOT EXISTS idx_tweets_conversation_id ON tweets(conversation_id) WHERE conversation_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tweets_scraped_at ON tweets(scraped_at DESC);
-CREATE INDEX IF NOT EXISTS idx_tweets_text_fts ON tweets USING gin(to_tsvector('english', text_normalized));
-CREATE INDEX IF NOT EXISTS idx_tweets_raw_json ON tweets USING gin(raw_json jsonb_path_ops);
-CREATE INDEX IF NOT EXISTS idx_tweets_engagement ON tweets((likes + retweets * 2 + quotes * 3) DESC);
+CREATE INDEX IF NOT EXISTS idx_tweets_text_fts ON tweets USING gin(to_tsvector('english', text));
 
 CREATE TABLE IF NOT EXISTS scrape_runs (
     id SERIAL PRIMARY KEY,

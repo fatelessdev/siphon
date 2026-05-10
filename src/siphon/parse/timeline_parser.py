@@ -139,22 +139,46 @@ def _extract_urls(legacy: dict) -> list[str]:
     ]
 
 
-def _extract_hashtags(legacy: dict) -> list[str]:
-    """Extract hashtag text from entities."""
-    return [
-        h.get("text", "")
-        for h in _deep_get(legacy, "entities", "hashtags") or []
-        if h.get("text")
-    ]
+def _is_promoted_or_ad(tweet_data: dict, legacy: dict) -> bool:
+    """Detect advertiser/promoted timeline entries that should not enter storage."""
+    source = f"{tweet_data.get('source', '')} {legacy.get('source', '')}".lower()
+    if "advertiser" in source or "promoted" in source:
+        return True
+    card = tweet_data.get("card")
+    if isinstance(card, dict):
+        card_legacy = card.get("legacy", {})
+        card_name = str(card_legacy.get("name", "")).lower()
+        if "promoted" in card_name:
+            return True
+    return False
 
 
-def _extract_cashtags(legacy: dict) -> list[str]:
-    """Extract cashtag text from entities."""
-    return [
-        c.get("text", "")
-        for c in _deep_get(legacy, "entities", "symbols") or []
-        if c.get("text")
-    ]
+def _unwrap_tweet_result(tweet_data: dict) -> dict:
+    """Unwrap visibility wrappers around tweet results."""
+    if tweet_data.get("__typename") == "TweetWithVisibilityResults" and tweet_data.get("tweet"):
+        return tweet_data["tweet"]
+    return tweet_data
+
+
+def _extract_context_text(tweet_data: dict) -> str:
+    legacy = tweet_data.get("legacy", {})
+    note_text = _deep_get(tweet_data, "note_tweet", "note_tweet_results", "result", "text")
+    return normalize_text(note_text or legacy.get("full_text", ""))
+
+
+def _extract_embedded_tweet_context(tweet_data: dict) -> tuple[int | None, str | None, str | None]:
+    tweet_data = _unwrap_tweet_result(tweet_data)
+    legacy = tweet_data.get("legacy")
+    core = tweet_data.get("core")
+    if not isinstance(legacy, dict) or not isinstance(core, dict):
+        return None, None, None
+
+    _author_id, author_handle, _author_name = _extract_user_info(tweet_data)
+    return (
+        _parse_int(tweet_data.get("rest_id"), 0) or None,
+        author_handle or None,
+        _extract_context_text(tweet_data) or None,
+    )
 
 
 # ── User extraction ──────────────────────────────────────────────────────
@@ -234,15 +258,18 @@ def _extract_tweet_result(entry: dict) -> dict | None:
 # ── Single tweet parsing ─────────────────────────────────────────────────
 
 
-def _parse_single_tweet(tweet_data: dict, stats: ParseStats, depth: int) -> Tweet | None:
+def _parse_single_tweet(
+    tweet_data: dict,
+    stats: ParseStats,
+    depth: int,
+    context_by_id: dict[int, tuple[str, str]] | None = None,
+) -> Tweet | None:
     """Parse tweet data (after result extraction) into a Tweet model.
 
     Handles TweetWithVisibilityResults wrapper, TweetTombstone, retweet
     resolution, quote tweet recursive parsing, note_tweet extraction.
     """
-    # Unwrap TweetWithVisibilityResults
-    if tweet_data.get("__typename") == "TweetWithVisibilityResults" and tweet_data.get("tweet"):
-        tweet_data = tweet_data["tweet"]
+    tweet_data = _unwrap_tweet_result(tweet_data)
 
     # Skip tombstones and unavailable
     typename = tweet_data.get("__typename", "")
@@ -253,6 +280,10 @@ def _parse_single_tweet(tweet_data: dict, stats: ParseStats, depth: int) -> Twee
     legacy = tweet_data.get("legacy")
     if not isinstance(legacy, dict):
         stats.dropped_no_legacy += 1
+        return None
+
+    if _is_promoted_or_ad(tweet_data, legacy):
+        stats.dropped_promoted += 1
         return None
 
     core = tweet_data.get("core")
@@ -292,36 +323,29 @@ def _parse_single_tweet(tweet_data: dict, stats: ParseStats, depth: int) -> Twee
         author_id, author_handle, author_name = _extract_user_info(tweet_data)
 
     # ── Reply / conversation detection ────────────────────────────────
-    is_reply = bool(actual_legacy.get("in_reply_to_status_id_str"))
-    parent_tweet_id = _parse_int(actual_legacy.get("in_reply_to_status_id_str"), 0) or None
-    conversation_id = _parse_int(actual_legacy.get("conversation_id_str"), 0) or None
+    reply_to_tweet_id = _parse_int(actual_legacy.get("in_reply_to_status_id_str"), 0) or None
+    reply_to_author_handle = actual_legacy.get("in_reply_to_screen_name") or None
+    reply_to_text: str | None = None
+    if reply_to_tweet_id and context_by_id:
+        parent_handle, parent_text = context_by_id.get(reply_to_tweet_id, (None, None))
+        reply_to_author_handle = reply_to_author_handle or parent_handle
+        reply_to_text = parent_text
 
     # ── Quote tweet (recursive, depth-limited) ────────────────────────
-    is_quote = False
+    quoted_author_handle: str | None = None
+    quoted_text: str | None = None
+    quoted_tweet_id: int | None = None
     quoted_result = _deep_get(actual_data, "quoted_status_result", "result")
     if isinstance(quoted_result, dict) and depth < 2:
-        # We just need to know a quote exists and its ID; full parsing is optional
-        is_quote = True
+        quoted_tweet_id, quoted_author_handle, quoted_text = _extract_embedded_tweet_context(quoted_result)
 
     # ── Media / URLs / Entities ───────────────────────────────────────
     media = _extract_media(actual_legacy)
     urls = _extract_urls(actual_legacy)
-    hashtags = _extract_hashtags(actual_legacy)
-    cashtags = _extract_cashtags(actual_legacy)
-
-    # ── Determine tweet_type ──────────────────────────────────────────
-    if is_retweet:
-        tweet_type = "retweet"
-    elif is_quote:
-        tweet_type = "quote"
-    elif is_reply:
-        tweet_type = "reply"
-    else:
-        tweet_type = "tweet"
 
     # ── Build model ───────────────────────────────────────────────────
     try:
-        text_normalized = normalize_text(text_raw)
+        text = normalize_text(text_raw)
         created_at = _parse_twitter_date(actual_legacy.get("created_at", ""))
 
         tweet = Tweet(
@@ -330,27 +354,15 @@ def _parse_single_tweet(tweet_data: dict, stats: ParseStats, depth: int) -> Twee
             author_handle=author_handle,
             author_name=author_name,
             created_at=created_at,
-            lang=actual_legacy.get("lang"),
-            text_raw=text_raw,
-            text_normalized=text_normalized,
-            tweet_type=tweet_type,
-            is_retweet=is_retweet,
-            is_reply=is_reply,
-            is_quote=is_quote,
-            parent_tweet_id=parent_tweet_id,
-            conversation_id=conversation_id,
-            likes=_parse_int(actual_legacy.get("favorite_count"), 0),
-            retweets=_parse_int(actual_legacy.get("retweet_count"), 0),
-            replies=_parse_int(actual_legacy.get("reply_count"), 0),
-            quotes=_parse_int(actual_legacy.get("quote_count"), 0),
-            views=_parse_int(_deep_get(actual_data, "views", "count"), 0),
-            bookmarks=_parse_int(actual_legacy.get("bookmark_count"), 0),
+            text=text,
+            reply_to_tweet_id=reply_to_tweet_id,
+            reply_to_author_handle=reply_to_author_handle,
+            reply_to_text=reply_to_text,
+            quoted_tweet_id=quoted_tweet_id,
+            quoted_author_handle=quoted_author_handle,
+            quoted_text=quoted_text,
             urls=urls,
             media=media,
-            hashtags=hashtags,
-            cashtags=cashtags,
-            pinned=False,  # Set by caller via parse_tweet_entry
-            raw_json=tweet_data,
         )
         return tweet
     except Exception:
@@ -362,7 +374,12 @@ def _parse_single_tweet(tweet_data: dict, stats: ParseStats, depth: int) -> Twee
 # ── Entry-level parsing ──────────────────────────────────────────────────
 
 
-def parse_tweet_entry(entry: dict, stats: ParseStats, depth: int = 0) -> Tweet | None:
+def parse_tweet_entry(
+    entry: dict,
+    stats: ParseStats,
+    depth: int = 0,
+    context_by_id: dict[int, tuple[str, str]] | None = None,
+) -> Tweet | None:
     """Parse a single timeline entry into a Tweet or None.
 
     Increments appropriate ParseStats counters on every drop.
@@ -375,12 +392,8 @@ def parse_tweet_entry(entry: dict, stats: ParseStats, depth: int = 0) -> Tweet |
             stats.dropped_no_result += 1
             return None
 
-        tweet = _parse_single_tweet(tweet_result, stats, depth)
+        tweet = _parse_single_tweet(tweet_result, stats, depth, context_by_id=context_by_id)
         if tweet is not None:
-            # Detect pinned tweets by entryId prefix
-            entry_id = entry.get("entryId", "")
-            if entry_id.startswith("pinned-tweet-"):
-                tweet.pinned = True
             stats.parsed += 1
         return tweet
 
@@ -431,10 +444,25 @@ def parse_timeline_response(data: dict, stats: ParseStats) -> tuple[list[Tweet],
 
             elif entry_type == "TimelineTimelineModule":
                 # Unwrap conversation threads / grouped tweets
+                context_by_id: dict[int, tuple[str, str]] = {}
                 for nested_item in content.get("items", []):
-                    # Wrap each nested item as if it were a top-level entry
                     fake_entry = {"content": nested_item.get("item", nested_item)}
-                    tweet = parse_tweet_entry(fake_entry, stats)
+                    tweet_result = _extract_tweet_result(fake_entry)
+                    if not isinstance(tweet_result, dict):
+                        continue
+                    tweet_result = _unwrap_tweet_result(tweet_result)
+                    legacy = tweet_result.get("legacy")
+                    core = tweet_result.get("core")
+                    if isinstance(legacy, dict) and isinstance(core, dict):
+                        _author_id, handle, _name = _extract_user_info(tweet_result)
+                        tweet_id = _parse_int(tweet_result.get("rest_id"), 0)
+                        text = _extract_context_text(tweet_result)
+                        if tweet_id and handle and text:
+                            context_by_id[tweet_id] = (handle, text)
+
+                for nested_item in content.get("items", []):
+                    fake_entry = {"content": nested_item.get("item", nested_item)}
+                    tweet = parse_tweet_entry(fake_entry, stats, context_by_id=context_by_id)
                     if tweet is not None:
                         tweets.append(tweet)
 

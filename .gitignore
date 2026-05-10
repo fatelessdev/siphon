@@ -14,3 +14,6 @@ venv/
 .pytest_cache/
 .mypy_cache/
 output/
+SIGIL.md
+AGENTS.md
+ULTIMATE_PLAN.md
